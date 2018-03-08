@@ -13,7 +13,7 @@ int CmdDumpNandRaw()
 	int* diag_handle = (int*)0x40E198;
 	int* handlesBase = (int*)0x4326C0;
 	const auto __BBC_CheckHandle = (int(*)(int handle))(0x403A20);
-	const auto drb = (int(*)(int vtable, int blk, int count, unsigned char *buffer, unsigned char *spare))(0x40AD80);
+	const auto __bbc_direct_readblocks = (int(*)(int vtable, int blk, int count, unsigned char *buffer, unsigned char *spare))(0x40AD80);
 
 	int res = __BBC_CheckHandle(*diag_handle);
 	if (res)
@@ -29,12 +29,12 @@ int CmdDumpNandRaw()
 	FILE *f = fopen("nand.bin", "wb");
 	FILE *f2 = fopen("spare.bin", "wb");
 	unsigned char buff[0x4000];
-	unsigned char spare[0x100];
+	unsigned char spare[0x10];
 	for (int i = 0; i < 0x1000; i++)
 	{
-		drb((int)direct_ptrs[0], i, 1, buff, spare);
+		__bbc_direct_readblocks((int)direct_ptrs[0], i, 1, buff, spare);
 		fwrite(buff, 1, 0x4000, f);
-		fwrite(spare, 1, 0x100, f2);
+		fwrite(spare, 1, 0x10, f2);
 
 		fflush(f);
 		fflush(f2);
