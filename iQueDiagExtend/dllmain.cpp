@@ -28,22 +28,119 @@ int CmdDumpNandRaw()
 
 	int* direct_ptrs = *(int**)(handle2 + 0x110);
 
-	FILE *f = fopen("nand.bin", "wb");
-	FILE *f2 = fopen("spare.bin", "wb");
-	unsigned char buff[0x4000];
-	unsigned char spare[0x10];
-	for (int i = 0; i < 0x1000; i++)
+	FILE* nand;
+	FILE* spare;
+	if (res = fopen_s(&nand, "nand.bin", "wb") != 0)
 	{
-		__bbc_direct_readblocks((int)direct_ptrs[0], i, 1, buff, spare);
-		fwrite(buff, 1, 0x4000, f);
-		fwrite(spare, 1, 0x10, f2);
-
-		fflush(f);
-		fflush(f2);
+		printf("error: failed to open nand.bin for writing: %d\n", res);
+		return 0;
+	}
+	if (res = fopen_s(&spare, "spare.bin", "wb") != 0)
+	{
+		printf("error: failed to open spare.bin for writing: %d\n", res);
+		return 0;
 	}
 
-	fclose(f);
-	fclose(f2);
+	printf("reading nand.bin/spare.bin from device...\n");
+
+	unsigned char buff[0x4000];
+	unsigned char sparebuff[0x10];
+	for (int i = 0; i < 0x1000; i++)
+	{
+		__bbc_direct_readblocks((int)direct_ptrs[0], i, 1, buff, sparebuff);
+		fwrite(buff, 1, 0x4000, nand);
+		fwrite(sparebuff, 1, 0x10, spare);
+
+		fflush(nand);
+		fflush(spare);
+
+		if (i % 0x10 == 0) // progress update every 16 blocks
+		{
+			float progress = ((float)i / (float)0x1000) * 100.f;
+			printf("%d/%d blocks read, %0.2f %%\n", i, 0x1000, progress);
+		}
+	}
+
+	fclose(nand);
+	fclose(spare);
+
+	printf("dump complete!\n");
+
+	return 0;
+}
+
+int CmdWriteNandRaw()
+{
+	int* diag_handle = (int*)0x40E198;
+	int* handlesBase = (int*)0x4326C0;
+	const auto __BBC_CheckHandle = (int(*)(int handle))(0x403A20);
+	const auto __bbc_direct_writeblocks = (int(*)(int vtable, int blk, int count, unsigned char *buffer, unsigned char *spare))(0x40B050);
+
+	int res = __BBC_CheckHandle(*diag_handle);
+	if (res)
+	{
+		printf("__BBC_CheckHandle failed, did you init with BBCInit (B)?\n");
+		return 0;
+	}
+
+	int* handle2 = (int*)(handlesBase[*diag_handle]);
+
+	int* direct_ptrs = *(int**)(handle2 + 0x110);
+
+	FILE* nand;
+	FILE* spare;
+	if (res = fopen_s(&nand, "nand.bin", "rb") != 0)
+	{
+		printf("error: failed to open nand.bin for reading: %d\n", res);
+		return 0;
+	}
+	if (res = fopen_s(&spare, "spare.bin", "rb") != 0)
+	{
+		printf("error: failed to open spare.bin for reading: %d\n", res);
+		return 0;
+	}
+
+	// nand.bin size check
+	fseek(nand, 0, SEEK_END);
+	long size = ftell(nand);
+	fseek(nand, 0, SEEK_SET);
+	if (size != 64 * 1024 * 1024)
+	{
+		printf("error: nand.bin size %d, expected %d\n", size, 64 * 1024 * 1024);
+		return 0;
+	}
+
+	// spare.bin size check
+	fseek(spare, 0, SEEK_END);
+	size = ftell(spare);
+	fseek(spare, 0, SEEK_SET);
+	if (size != 64 * 1024)
+	{
+		printf("error: spare.bin size %d, expected %d\n", size, 64 * 1024);
+		return 0;
+	}
+
+	printf("writing nand.bin/spare.bin to device...\n");
+
+	unsigned char buff[0x4000];
+	unsigned char sparebuff[0x10];
+	for (int i = 0; i < 0x1000; i++)
+	{
+		fread(buff, 1, 0x4000, nand);
+		fread(sparebuff, 1, 0x10, spare);
+		__bbc_direct_writeblocks((int)direct_ptrs[0], i, 1, buff, sparebuff);
+
+		if (i % 0x10 == 0) // progress update every 16 blocks
+		{
+			float progress = ((float)i / (float)0x1000) * 100.f;
+			printf("%d/%d blocks written, %0.2f %%\n", i, 0x1000, progress);
+		}
+	}
+
+	fclose(nand);
+	fclose(spare);
+
+	printf("write complete!\n");
 
 	return 0;
 }
@@ -182,6 +279,9 @@ int __cdecl CommandHandlerHook(char* input)
 	case 'x':
 		printf("\tiQueDiagExtend Commands:\n");
 		printf("\t1\t - reads nand from ique to nand.bin/spare.bin\n");
+#ifdef DEVELOPER_MODE
+		printf("\t2\t - writes nand from nand.bin/spare.bin to ique\n");
+#endif
 		printf("\t3 [file] - reads [file] from ique [to file]\n");
 #ifdef DEVELOPER_MODE
 		printf("\t4 [file] - write [file] to ique\n");
@@ -191,6 +291,11 @@ int __cdecl CommandHandlerHook(char* input)
 	case '1':
 		return CmdDumpNandRaw();
 		break;
+#ifdef DEVELOPER_MODE
+	case '2':
+		return CmdWriteNandRaw();
+		break;
+#endif
 	case '3':
 		return CmdDumpFile(input + 1);
 		break;
