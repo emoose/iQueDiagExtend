@@ -120,7 +120,17 @@ int CmdWriteNandRaw()
 		return 0;
 	}
 
-	printf("writing nand.bin/spare.bin to device...\n");
+	printf("write nand.bin/spare.bin to the device? (y/n)\n");
+	int answer = getchar();
+	if (answer != 'Y' && answer != 'y')
+	{
+		fclose(nand);
+		fclose(spare);
+		printf("write aborted\n");
+		return 0;
+	}
+
+	printf("writing nand.bin/spare.bin...\n");
 
 	unsigned char buff[0x4000];
 	unsigned char sparebuff[0x10];
