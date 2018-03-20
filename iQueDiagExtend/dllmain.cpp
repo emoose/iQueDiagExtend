@@ -138,6 +138,14 @@ int CmdWriteNandRaw()
 	{
 		fread(buff, 1, 0x4000, nand);
 		fread(sparebuff, 1, 0x10, spare);
+
+		if (sparebuff[5] != 0xFF)
+			continue; // skip trying to write bad blocks
+
+		// when writing spare, only first 3 bytes (SA block info) need to be populated, rest can be all 0xFF
+		for (int i = 3; i < 0x10; i++)
+			sparebuff[i] = 0xFF;
+		
 		__bbc_direct_writeblocks((int)direct_ptrs[0], i, 1, buff, sparebuff);
 
 		if (i % 0x10 == 0) // progress update every 16 blocks
