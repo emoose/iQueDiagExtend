@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include <fstream>
 #include <string>
+#include <vector>
 #include "include\MinHook.h"
 
 //#define DEVELOPER_MODE
@@ -43,9 +44,11 @@ int CmdDumpNandRaw()
 
 	printf("reading nand.bin/spare.bin from device...\n");
 
+	int numBlocks = 0x1000;
+
 	unsigned char buff[0x4000];
 	unsigned char sparebuff[0x10];
-	for (int i = 0; i < 0x1000; i++)
+	for (int i = 0; i < numBlocks; i++)
 	{
 		__bbc_direct_readblocks((int)direct_ptrs[0], i, 1, buff, sparebuff);
 		fwrite(buff, 1, 0x4000, nand);
@@ -56,8 +59,8 @@ int CmdDumpNandRaw()
 
 		if (i % 0x10 == 0) // progress update every 16 blocks
 		{
-			float progress = ((float)i / (float)0x1000) * 100.f;
-			printf("%d/%d blocks read, %0.2f %%\n", i, 0x1000, progress);
+			float progress = ((float)i / (float)numBlocks) * 100.f;
+			printf("%d/%d blocks read, %0.2f %%\n", i, numBlocks, progress);
 		}
 	}
 
@@ -69,7 +72,7 @@ int CmdDumpNandRaw()
 	return 0;
 }
 
-int CmdWriteNandRaw()
+int CmdWriteNandRaw(char* args)
 {
 	int* diag_handle = (int*)0x40E198;
 	int* handlesBase = (int*)0x4326C0;
@@ -134,24 +137,118 @@ int CmdWriteNandRaw()
 
 	unsigned char buff[0x4000];
 	unsigned char sparebuff[0x10];
-	for (int i = 0; i < 0x1000; i++)
+
+	int numBlocks = 0x1000;
+
+	if (args[0] == ' ')
+		args++;
+
+	// if we've been given ranges, deserialize them and go through them
+	if (strlen(args) > 0)
 	{
-		fread(buff, 1, 0x4000, nand);
-		fread(sparebuff, 1, 0x10, spare);
+		std::vector<std::pair<int, int>> ranges;
+		int numBlocksToWrite = 0;
 
-		if (sparebuff[5] != 0xFF)
-			continue; // skip trying to write bad blocks
-
-		// when writing spare, only first 3 bytes (SA block info) need to be populated, rest can be all 0xFF
-		for (int i = 3; i < 0x10; i++)
-			sparebuff[i] = 0xFF;
-		
-		__bbc_direct_writeblocks((int)direct_ptrs[0], i, 1, buff, sparebuff);
-
-		if (i % 0x10 == 0) // progress update every 16 blocks
+		char* curPtr = args;
+		char* end = args + strlen(args);
+		while (curPtr < end)
 		{
-			float progress = ((float)i / (float)0x1000) * 100.f;
-			printf("%d/%d blocks written, %0.2f %%\n", i, 0x1000, progress);
+			char cur[256];
+			memset(cur, 0, 256);
+
+			int splIdx = strcspn(curPtr, ",");
+			memcpy(cur, curPtr, splIdx);
+			curPtr += (splIdx + 1);
+
+			char start[256];
+			char end[256];
+			memset(start, 0, 256);
+			memset(end, 0, 256);
+			strcpy_s(start, "0x0");
+			sprintf_s(end, "0x%x", numBlocks);
+
+			if (cur[0] == '-')
+				strcpy_s(end, cur + 1); // range is only giving the end block
+			else if (cur[strlen(cur) - 1] == '-')
+				memcpy(start, cur, strlen(cur) - 1); // range is only giving the start block
+			else
+			{
+				splIdx = strcspn(cur, "-");
+				if (splIdx == strlen(cur)) // theres no "-", so just a single block specified
+				{
+					strcpy_s(start, cur);
+					int num = strtol(start, NULL, 0);
+					sprintf_s(end, "0x%x", num + 1);
+				}
+				else
+				{
+					// is specifying both start block and end block
+					memcpy(start, cur, splIdx);
+					strcpy_s(end, cur + splIdx + 1);
+				}
+			}
+
+			int startNum = strtol(start, NULL, 0);
+			int endNum = strtol(end, NULL, 0);
+			numBlocksToWrite += (endNum - startNum);
+
+			ranges.push_back(std::pair<int, int>(startNum, endNum));
+		}
+
+		int numBlocksWritten = 0;
+
+		for(auto range : ranges)
+		{
+			for (int i = range.first; i < range.second; i++)
+			{
+				// go to correct offset in nand/spare
+				fseek(nand, i * 0x4000, SEEK_SET);
+				fseek(spare, i * 0x10, SEEK_SET);
+
+				fread(buff, 1, 0x4000, nand);
+				fread(sparebuff, 1, 0x10, spare);
+
+				if (sparebuff[5] != 0xFF)
+					continue; // skip trying to write bad blocks
+
+				// when writing spare, only first 3 bytes (SA block info) need to be populated, rest can be all 0xFF
+				for (int i = 3; i < 0x10; i++)
+					sparebuff[i] = 0xFF;
+
+				__bbc_direct_writeblocks((int)direct_ptrs[0], i, 1, buff, sparebuff);
+
+				numBlocksWritten++;
+
+				if (numBlocksWritten % 0x10 == 0) // progress update every 16 blocks
+				{
+					float progress = ((float)numBlocksWritten / (float)numBlocksToWrite) * 100.f;
+					printf("%d/%d blocks written, %0.2f %%\n", numBlocksWritten, numBlocksToWrite, progress);
+				}
+			}
+		}
+	}
+	else
+	{
+		// haven't been given any ranges to write, so just write the file sequentially
+		for (int i = 0; i < numBlocks; i++)
+		{
+			fread(buff, 1, 0x4000, nand);
+			fread(sparebuff, 1, 0x10, spare);
+
+			if (sparebuff[5] != 0xFF)
+				continue; // skip trying to write bad blocks
+
+			// when writing spare, only first 3 bytes (SA block info) need to be populated, rest can be all 0xFF
+			for (int i = 3; i < 0x10; i++)
+				sparebuff[i] = 0xFF;
+
+			__bbc_direct_writeblocks((int)direct_ptrs[0], i, 1, buff, sparebuff);
+
+			if (i % 0x10 == 0) // progress update every 16 blocks
+			{
+				float progress = ((float)i / (float)numBlocks) * 100.f;
+				printf("%d/%d blocks written, %0.2f %%\n", i, numBlocks, progress);
+			}
 		}
 	}
 
@@ -296,22 +393,25 @@ int __cdecl CommandHandlerHook(char* input)
 	case 'X':
 	case 'x':
 		printf("\tiQueDiagExtend Commands:\n");
-		printf("\t1\t - reads nand from ique to nand.bin/spare.bin\n");
+		printf("\t1\t   - reads nand from ique to nand.bin/spare.bin\n");
 #ifdef DEVELOPER_MODE
-		printf("\t2\t - writes nand from nand.bin/spare.bin to ique\n");
+		printf("\t2 <ranges> - writes nand from nand.bin/spare.bin to ique\n");
+		printf("\tranges can optionally be specified, which might be quicker than writing the whole file\n");
+		printf("\teg: \"2 0-0x100,4075\" writes blocks 0 - 0x100 (not including 0x100 itself), and block 4075\n");
+		printf("\tmake sure hex block numbers are prefixed with '0x'!\n\n");
 #endif
 		printf("\t3 [file] - reads [file] from ique [to file]\n");
 #ifdef DEVELOPER_MODE
 		printf("\t4 [file] - write [file] to ique\n");
 #endif
-		printf("\t5 List all files on ique\n");
+		printf("\t5 - list all files on ique\n");
 		break;
 	case '1':
 		return CmdDumpNandRaw();
 		break;
 #ifdef DEVELOPER_MODE
 	case '2':
-		return CmdWriteNandRaw();
+		return CmdWriteNandRaw(input + 1);
 		break;
 #endif
 	case '3':
